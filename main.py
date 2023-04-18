@@ -2,6 +2,22 @@ import torch.optim as optim
 from dataset import *
 from model import *
 import argparse
+from math import sqrt
+from scipy.stats import pearsonr
+
+
+def MCC(TP, FP, FN, TN):
+    numerator = (TP * TN) - (FP * FN)
+    denominator = sqrt((TP + FP) * (TP + FN) * (TN + FP) * (TN + FN))
+    result = numerator/(denominator+1e-5)
+    return result
+
+
+def pearson(desc1, desc2):
+    x_ = desc1 - np.mean(desc1)
+    y_ = desc2 - np.mean(desc2)
+    r = np.dot(x_,y_) / (np.linalg.norm(x_)*np.linalg.norm(y_))
+    return r
 
 
 def parse_args():
@@ -10,11 +26,47 @@ def parse_args():
     parser.add_argument('--lr', default=5e-5, type=float)
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--train_epoch', default=15, type=int)
-    parser.add_argument('--need_transfer', default=True, type=bool)
-    parser.add_argument('--use_adv', default=True, type=bool)
-    parser.add_argument('--use_diff', default=False, type=bool)
+    parser.add_argument('--need_transfer', default=1, type=int)
+    parser.add_argument('--use_adv', default=1, type=int)
+    parser.add_argument('--use_diff', default=0, type=int)
     args = parser.parse_args()
     return args
+
+def val_and_test_mcc(val_dataloader, test_dataloader, device, model, name):
+    TP, FP, FN, TN = 0,0,0,0
+    for idx, mask, target in val_dataloader:
+        idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+        output, cls_result, type_id, shared, specific = model(idx, mask, name)
+        pred = output.argmax(dim=1)
+        for i in range(pred.size(0)):
+            if pred[i] == 1 and target[i] == 1:
+                TP += 1
+            elif pred[i] == 1 and target[i] == 0:
+                FP += 1
+            elif pred[i] == 0 and target[i] == 1:
+                FN += 1
+            elif pred[i] == 0 and target[i] == 0:
+                TN += 1
+    val_mcc = MCC(TP, FP, FN, TN)
+    print(name + ' Val MCC: {:.6f}'.format(val_mcc))
+
+    # TP, FP, FN, TN = 0, 0, 0, 0
+    # for idx, mask, target in test_dataloader:
+    #     idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+    #     output, cls_result, type_id, shared, specific = model(idx, mask, name)
+    #     pred = output.argmax(dim=1)
+    #     for i in range(pred.size(0)):
+    #         if pred[i] == 1 and target[i] == 1:
+    #             TP += 1
+    #         elif pred[i] == 1 and target[i] == 0:
+    #             FP += 1
+    #         elif pred[i] == 0 and target[i] == 1:
+    #             FN += 1
+    #         elif pred[i] == 0 and target[i] == 0:
+    #             TN += 1
+    # test_mcc = MCC(TP, FP, FN, TN)
+    # print(name + ' Test MCC: {:.6f}'.format(test_mcc))
+    return [val_mcc]
 
 
 def val_and_test(val_dataloader, test_dataloader, device, model, name):
@@ -40,6 +92,34 @@ def val_and_test(val_dataloader, test_dataloader, device, model, name):
     test_acc = correct / len(test_dataloader)
     print(name + ' Test Accuracy: {:.6f}'.format(correct / total_num))
     return [val_acc, test_acc]
+
+
+def val_and_test_pearson(val_dataloader, test_dataloader, device, model, name, num_class):
+    total_num = 0
+    total_pearson = 0
+    for idx, mask, target in val_dataloader:
+        idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+        output, cls_result, type_id, shared, specific = model(idx, mask, name)
+        output = torch.softmax(output, dim=-1)
+        target = torch.eye(num_class)[target.cpu()].tolist()
+        for i in range(len(target)):
+            total_pearson += pearson(target[i], output[i].cpu().detach().tolist())
+        total_num += len(target)
+    val_acc = total_pearson / total_num
+    print(name + ' Val Pearson: {:.6f}'.format(val_acc))
+
+    # total_num = 0
+    # total_pearson = 0
+    # for idx, mask, target in test_dataloader:
+    #     idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+    #     output, cls_result, type_id, shared, specific = model(idx, mask, name)
+    #     target = torch.eye(target.size(1))[target]
+    #     for i in range(target.size(0)):
+    #         total_pearson += pearsonr(target[i], output[i]).statistic
+    #     total_num += target.size(0)
+    # test_acc = total_pearson / total_num
+    # print(name + ' Test Pearson: {:.6f}'.format(test_acc))
+    return [val_acc]
 
 
 def train_datasets(name, dataset_loader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch):
@@ -151,7 +231,7 @@ def train(datasets_names=None, lr=5e-5, optimizer="AdamW", batch_size=8, model_n
             mrpc_acc.append(mrpc_list)
         if datasets_names == None or "stsb" in datasets_names:
             train_datasets("stsb", stsb_train_dataloader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch)
-            stsb_list = val_and_test(stsb_val_dataloader, stsb_test_dataloader, device, model, "stsb")
+            stsb_list = val_and_test_pearson(stsb_val_dataloader, stsb_test_dataloader, device, model, "stsb", 6)
             stsb_acc.append(stsb_list)
         if datasets_names == None or "sst2" in datasets_names:
             train_datasets("sst2", sst2_train_dataloader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch)
@@ -163,7 +243,7 @@ def train(datasets_names=None, lr=5e-5, optimizer="AdamW", batch_size=8, model_n
             qnli_acc.append(qnli_list)
         if datasets_names == None or "cola" in datasets_names:
             train_datasets("cola", cola_train_dataloader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch)
-            cola_list = val_and_test(cola_val_dataloader, cola_test_dataloader, device, model, "cola")
+            cola_list = val_and_test_mcc(cola_val_dataloader, cola_test_dataloader, device, model, "cola")
             cola_acc.append(cola_list)
         if datasets_names == None or "ax" in datasets_names:
             train_datasets("ax", cola_train_dataloader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch)
