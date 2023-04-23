@@ -50,7 +50,7 @@ class Bert(nn.Module):
             self.linear_for_mrpc = nn.Linear(768 * 2, 2)
         if dataset_names == None or "stsb" in dataset_names:
             self.stsb_bert = BertModel.from_pretrained(model_name)
-            self.linear_for_stsb = nn.Linear(768 * 2, 6)
+            self.linear_for_stsb = nn.Linear(768 * 2, 1)
         if dataset_names == None or "sst2" in dataset_names:
             self.sst2_bert = BertModel.from_pretrained(model_name)
             self.linear_for_sst2 = nn.Linear(768 * 2, 2)
@@ -112,7 +112,7 @@ class Bert(nn.Module):
             out = self.linear_for_stsb(out)
             out_shared = GradientReverseFunction.apply(clf_feature_shared)
             cls_type = self.classifier(out_shared)
-            return out, cls_type, type_id, clf_feature_shared, out_stsb
+            return torch.squeeze(out), cls_type, type_id, clf_feature_shared, out_stsb
         elif type_n == "sst2":
             out_sst2 = self.sst2_bert(input_ids=input_ids, attention_mask=input_mask)
             out_sst2 = out_sst2.last_hidden_state[:, 0, :]
