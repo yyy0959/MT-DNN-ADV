@@ -95,17 +95,14 @@ def val_and_test(val_dataloader, test_dataloader, device, model, name):
 
 
 def val_and_test_pearson(val_dataloader, test_dataloader, device, model, name, num_class):
-    total_num = 0
-    total_pearson = 0
+    true_vec = []
+    pred_vec = []
     for idx, mask, target in val_dataloader:
-        idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+        true_vec.extend(target.tolist())
+        idx, mask, target = idx.to(device), mask.to(device), target.to(device)
         output, cls_result, type_id, shared, specific = model(idx, mask, name)
-        output = torch.softmax(output, dim=-1)
-        target = torch.eye(num_class)[target.cpu()].tolist()
-        for i in range(len(target)):
-            total_pearson += pearson(target[i], output[i].cpu().detach().tolist())
-        total_num += len(target)
-    val_acc = total_pearson / total_num
+        pred_vec.extend(output.cpu().detach().tolist())
+    val_acc = pearson(true_vec, pred_vec)
     print(name + ' Val Pearson: {:.6f}'.format(val_acc))
 
     # total_num = 0
@@ -122,12 +119,18 @@ def val_and_test_pearson(val_dataloader, test_dataloader, device, model, name, n
     return [val_acc]
 
 
-def train_datasets(name, dataset_loader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch):
+def train_datasets(name, dataset_loader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch, stsb_loss=None):
     for batch_idx, (idx, mask, target) in enumerate(dataset_loader):
-        idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+        if name != "stsb":
+            idx, mask, target = idx.to(device), mask.to(device), target.to(device).long()
+        else:
+            idx, mask, target = idx.to(device), mask.to(device), target.to(device).float()
         output, cls_result, type_id, shared, specific = model(idx, mask, name)
         optimizer.zero_grad()
-        loss = Loss(output, target)
+        if name == "stsb":
+            loss = stsb_loss(output, target)
+        else:
+            loss = Loss(output, target)
         if use_adv:
             loss += alpha * Loss(cls_result, (torch.ones_like(target) * type_id).long().to(device))
         if use_diff:
@@ -187,6 +190,7 @@ def train(datasets_names=None, lr=5e-5, optimizer="AdamW", batch_size=8, model_n
     if optimizer == "AdamW":
         optimizer = optim.AdamW(model.parameters(), lr=lr)
     Loss = nn.CrossEntropyLoss()
+    stsbLoss = nn.MSELoss()
     Diff_Loss = diff_loss()
     if datasets_names==None or "mrpc" in datasets_names:
         mrpc_train_dataloader, mrpc_val_dataloader, mrpc_test_dataloader = Get_datasets("mrpc", batch_size=batch_size)
@@ -230,7 +234,7 @@ def train(datasets_names=None, lr=5e-5, optimizer="AdamW", batch_size=8, model_n
             mrpc_list = val_and_test(mrpc_val_dataloader, mrpc_test_dataloader, device, model, "mrpc")
             mrpc_acc.append(mrpc_list)
         if datasets_names == None or "stsb" in datasets_names:
-            train_datasets("stsb", stsb_train_dataloader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch)
+            train_datasets("stsb", stsb_train_dataloader, device, model, optimizer, Loss, use_adv, use_diff, Diff_Loss, alpha, beta, epoch, stsbLoss)
             stsb_list = val_and_test_pearson(stsb_val_dataloader, stsb_test_dataloader, device, model, "stsb", 6)
             stsb_acc.append(stsb_list)
         if datasets_names == None or "sst2" in datasets_names:
